@@ -1,40 +1,38 @@
 """Paper ingestion and retrieval endpoints."""
 
 import hashlib
-import json
-from pathlib import Path
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
-from pydantic import BaseModel
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from scientis.api.deps import settings as get_settings
+from scientis.api.deps import get_db, get_settings_dep
 from scientis.config import Settings
+from scientis.models.db_models import PaperRecord
 from scientis.models.paper import PaperMetadata, PaperSummary
-from scientis.services.events import EventBus, PaperUploaded
+from scientis.services.graph_service import get_graph_service
 from scientis.services.ingestion import ingest_paper
-from scientis.services.parsing import parse_paper
+from scientis.services.pipeline import run_pipeline
 from scientis.storage.object_store import ObjectStore
 
 router = APIRouter()
-_papers_db: dict[str, PaperSummary] = {}  # TODO: replace with PostgreSQL
 
 
-class PaperUploadResponse(BaseModel):
-    paper_id: str
-    status: str
-    checksum: str
-    metadata: PaperMetadata
-
-
-@router.post("/papers", response_model=PaperUploadResponse, status_code=202)
+@router.post("/papers", response_model=PaperSummary, status_code=202)
 async def upload_paper(
     file: UploadFile,
+    background_tasks: BackgroundTasks,
     metadata: Optional[str] = None,
-    background_tasks: BackgroundTasks = None,
-    settings: Settings = Depends(get_settings),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings_dep),
 ):
-    """Upload a paper PDF for ingestion and analysis."""
+    """Upload a PDF for ingestion and analysis.
+
+    The file is stored immediately; parsing and claim extraction run
+    asynchronously in the background.
+    """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are accepted")
 
@@ -42,14 +40,13 @@ async def upload_paper(
     checksum = hashlib.sha256(content).hexdigest()
 
     # Deduplicate by checksum
-    for pid, paper in _papers_db.items():
-        if paper.checksum == checksum:
-            raise HTTPException(409, f"Duplicate paper (already ingested as {pid})")
+    existing = await db.scalar(select(PaperRecord).where(PaperRecord.checksum == checksum))
+    if existing:
+        raise HTTPException(409, f"Duplicate paper (already ingested as {existing.paper_id})")
 
     store = ObjectStore(settings)
     paper_id = ingest_paper(store, content, file.filename)
 
-    # Parse metadata if provided
     meta = PaperMetadata()
     if metadata:
         try:
@@ -57,41 +54,84 @@ async def upload_paper(
         except Exception:
             pass
 
-    summary = PaperSummary(
+    record = PaperRecord(
+        paper_id=paper_id,
+        filename=file.filename,
+        checksum=checksum,
+        status="ingested",
+        metadata_json=meta.model_dump(),
+    )
+    db.add(record)
+    await db.commit()
+
+    # Store a Paper node in Neo4j (non-blocking failure is acceptable here)
+    try:
+        summary = PaperSummary(
+            paper_id=paper_id,
+            filename=file.filename,
+            checksum=checksum,
+            status="ingested",
+            metadata=meta,
+        )
+        await get_graph_service().create_paper(summary)
+    except Exception:
+        pass
+
+    async def _status_callback(pid: str, status: str) -> None:
+        async with get_db() as session:  # own session for background task
+            await session.execute(
+                update(PaperRecord)
+                .where(PaperRecord.paper_id == pid)
+                .values(status=status, updated_at=datetime.utcnow())
+            )
+            await session.commit()
+
+    background_tasks.add_task(run_pipeline, paper_id, store, settings, _status_callback)
+
+    return PaperSummary(
         paper_id=paper_id,
         filename=file.filename,
         checksum=checksum,
         status="ingested",
         metadata=meta,
     )
-    _papers_db[paper_id] = summary
-
-    # Emit event and enqueue parsing
-    EventBus.emit(PaperUploaded(paper_id=paper_id, filename=file.filename))
-    background_tasks.add_task(parse_paper, paper_id, store, settings)
-
-    return PaperUploadResponse(
-        paper_id=paper_id,
-        status="ingested",
-        checksum=checksum,
-        metadata=meta,
-    )
 
 
 @router.get("/papers/{paper_id}", response_model=PaperSummary)
-async def get_paper(paper_id: str):
+async def get_paper(
+    paper_id: str,
+    db: AsyncSession = Depends(get_db),
+):
     """Get paper status and metadata."""
-    paper = _papers_db.get(paper_id)
-    if not paper:
+    record = await db.get(PaperRecord, paper_id)
+    if not record:
         raise HTTPException(404, f"Paper {paper_id} not found")
-    return paper
+    return _record_to_summary(record)
 
 
 @router.get("/papers")
-async def list_papers(limit: int = 20, offset: int = 0):
+async def list_papers(
+    limit: int = 20,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+):
     """List ingested papers."""
-    papers = list(_papers_db.values())
+    total_result = await db.execute(select(PaperRecord))
+    all_records = total_result.scalars().all()
+    page = all_records[offset : offset + limit]
     return {
-        "total": len(papers),
-        "items": papers[offset : offset + limit],
+        "total": len(all_records),
+        "items": [_record_to_summary(r) for r in page],
     }
+
+
+def _record_to_summary(record: PaperRecord) -> PaperSummary:
+    return PaperSummary(
+        paper_id=record.paper_id,
+        filename=record.filename,
+        checksum=record.checksum,
+        status=record.status,
+        metadata=PaperMetadata.model_validate(record.metadata_json or {}),
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
