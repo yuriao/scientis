@@ -1,7 +1,6 @@
 """SQLAlchemy ORM models for PostgreSQL persistence."""
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import JSON, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -35,7 +34,7 @@ class DiscoverySessionRecord(Base):
     status: Mapped[str] = mapped_column(String, default="running")
     evidence_count: Mapped[int] = mapped_column(Integer, default=0)
     hypotheses_json: Mapped[list] = mapped_column(JSON, default=list)
-    report: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    report: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

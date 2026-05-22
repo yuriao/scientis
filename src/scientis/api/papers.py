@@ -2,7 +2,6 @@
 
 import hashlib
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 from sqlalchemy import select, update
@@ -24,7 +23,7 @@ router = APIRouter()
 async def upload_paper(
     file: UploadFile,
     background_tasks: BackgroundTasks,
-    metadata: Optional[str] = None,
+    metadata: str | None = None,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings_dep),
 ):

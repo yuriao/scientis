@@ -50,9 +50,7 @@ class ObjectStore:
         return response["Body"].read()
 
     def list(self, prefix: str = "", max_keys: int = 1000) -> list[str]:
-        response = self._client.list_objects_v2(
-            Bucket=self.bucket, Prefix=prefix, MaxKeys=max_keys
-        )
+        response = self._client.list_objects_v2(Bucket=self.bucket, Prefix=prefix, MaxKeys=max_keys)
         if "Contents" not in response:
             return []
         return [obj["Key"] for obj in response["Contents"]]

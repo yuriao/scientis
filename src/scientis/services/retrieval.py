@@ -11,7 +11,6 @@ is rebuilt in full after each addition (acceptable for typical corpus sizes).
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
 from scientis.llm import LLMClient, ModelTier, get_llm
 
@@ -25,7 +24,7 @@ class RetrievalResult:
     text: str
     section: str = ""
     score: float = 0.0
-    source: str = ""       # "bm25" | "vector" | "graph"
+    source: str = ""  # "bm25" | "vector" | "graph"
     entities: list[str] = field(default_factory=list)
     figure_ids: list[str] = field(default_factory=list)
 
@@ -33,7 +32,7 @@ class RetrievalResult:
 class HybridRetriever:
     """Multi-strategy retriever with RRF score fusion."""
 
-    def __init__(self, llm: Optional[LLMClient] = None):
+    def __init__(self, llm: LLMClient | None = None):
         self._llm = llm or get_llm()
         self._corpus: dict[str, RetrievalResult] = {}
         self._bm25 = None
@@ -92,9 +91,7 @@ class HybridRetriever:
         )
         fused.sort(key=lambda x: x[1], reverse=True)
         results = [
-            self._corpus[chunk_id]
-            for chunk_id, _ in fused[:top_k]
-            if chunk_id in self._corpus
+            self._corpus[chunk_id] for chunk_id, _ in fused[:top_k] if chunk_id in self._corpus
         ]
 
         # Graph expansion is best-effort; skipped if Neo4j is unavailable
@@ -157,13 +154,15 @@ class HybridRetriever:
             try:
                 claims = await graph.find_supporting_claims(word, limit=3)
                 for c in claims:
-                    results.append(RetrievalResult(
-                        chunk_id=c.get("claim_id", ""),
-                        paper_id=c.get("paper_id", ""),
-                        text=c.get("text", ""),
-                        score=c.get("confidence", 0.5),
-                        source="graph",
-                    ))
+                    results.append(
+                        RetrievalResult(
+                            chunk_id=c.get("claim_id", ""),
+                            paper_id=c.get("paper_id", ""),
+                            text=c.get("text", ""),
+                            score=c.get("confidence", 0.5),
+                            source="graph",
+                        )
+                    )
             except Exception:
                 continue
 
@@ -189,7 +188,7 @@ class HybridRetriever:
 
 # ── Module-level singleton ───────────────────────────────────────────────
 
-_retriever: Optional[HybridRetriever] = None
+_retriever: HybridRetriever | None = None
 
 
 def get_retriever() -> HybridRetriever:

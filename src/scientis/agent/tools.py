@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 # ── Tool: Expand Query ───────────────────────────────────────────────
 
+
 async def expand_query(state: dict[str, Any]) -> dict[str, Any]:
     """Expand the user's question with disease synonyms, mechanism synonyms,
     and reformulated search queries to improve retrieval coverage."""
@@ -58,6 +59,7 @@ async def expand_query(state: dict[str, Any]) -> dict[str, Any]:
 
 # ── Tool: Retrieve Context ───────────────────────────────────────────
 
+
 async def retrieve_context(state: dict[str, Any]) -> dict[str, Any]:
     """Hybrid retrieval (BM25 + vector + graph) across all indexed papers."""
     queries = state.get("expanded_queries", [state["question"]])
@@ -67,16 +69,18 @@ async def retrieve_context(state: dict[str, Any]) -> dict[str, Any]:
     for query in queries[:3]:
         results = await retriever.retrieve(query, top_k=20)
         for r in results:
-            all_chunks.append({
-                "chunk_id": r.chunk_id,
-                "paper_id": r.paper_id,
-                "text": r.text,
-                "section": r.section,
-                "score": r.score,
-                "source": r.source,
-                "entities": r.entities,
-                "figure_ids": r.figure_ids,
-            })
+            all_chunks.append(
+                {
+                    "chunk_id": r.chunk_id,
+                    "paper_id": r.paper_id,
+                    "text": r.text,
+                    "section": r.section,
+                    "score": r.score,
+                    "source": r.source,
+                    "entities": r.entities,
+                    "figure_ids": r.figure_ids,
+                }
+            )
 
     # Deduplicate by chunk_id, keep highest score
     seen: set[str] = set()
@@ -97,6 +101,7 @@ async def retrieve_context(state: dict[str, Any]) -> dict[str, Any]:
 
 # ── Tool: Compile Evidence ────────────────────────────────────────────
 
+
 async def compile_evidence(state: dict[str, Any]) -> dict[str, Any]:
     """Build a cross-paper comparison matrix: which papers support vs conflict."""
     chunks = state.get("retrieved_chunks", [])
@@ -107,8 +112,7 @@ async def compile_evidence(state: dict[str, Any]) -> dict[str, Any]:
         return {"comparison_set": [], "supporting_papers": [], "conflicting_papers": []}
 
     context = "\n\n---\n\n".join(
-        f"[{c['paper_id']}] ({c.get('section', '?')}) {c['text'][:500]}"
-        for c in chunks[:15]
+        f"[{c['paper_id']}] ({c.get('section', '?')}) {c['text'][:500]}" for c in chunks[:15]
     )
 
     resp = await llm.generate(
@@ -151,6 +155,7 @@ async def compile_evidence(state: dict[str, Any]) -> dict[str, Any]:
 
 # ── Tool: Induce Mechanism ───────────────────────────────────────────
 
+
 async def induce_mechanism(state: dict[str, Any]) -> dict[str, Any]:
     """Cluster evidence into shared mechanistic themes and generate hypotheses."""
     chunks = state.get("retrieved_chunks", [])
@@ -161,9 +166,7 @@ async def induce_mechanism(state: dict[str, Any]) -> dict[str, Any]:
     if not chunks:
         return {"hypotheses": [], "ranked_hypotheses": []}
 
-    context = "\n\n".join(
-        f"PAPER {c['paper_id']}: {c['text'][:400]}" for c in chunks[:20]
-    )
+    context = "\n\n".join(f"PAPER {c['paper_id']}: {c['text'][:400]}" for c in chunks[:20])
     comparison_text = json.dumps(comparison[:10], indent=2)
 
     resp = await llm.generate(
@@ -213,6 +216,7 @@ async def induce_mechanism(state: dict[str, Any]) -> dict[str, Any]:
 
 # ── Tool: Check Contradictions ─────────────────────────────────────────
 
+
 async def check_contradictions(state: dict[str, Any]) -> dict[str, Any]:
     """Force the agent to find evidence that weakens each ranked hypothesis."""
     hypotheses = state.get("ranked_hypotheses", [])
@@ -222,18 +226,18 @@ async def check_contradictions(state: dict[str, Any]) -> dict[str, Any]:
     if not hypotheses:
         return {"counterevidence_findings": [], "weakened_hypotheses": []}
 
-    hp_text = json.dumps([
-        {
-            "id": h.get("hypothesis_id"),
-            "mechanism": h.get("mechanism"),
-            "claims": h.get("supporting_claims", [])[:5],
-        }
-        for h in hypotheses
-    ])
-
-    context = "\n\n".join(
-        f"[{c['paper_id']}] {c['text'][:300]}" for c in chunks[:15]
+    hp_text = json.dumps(
+        [
+            {
+                "id": h.get("hypothesis_id"),
+                "mechanism": h.get("mechanism"),
+                "claims": h.get("supporting_claims", [])[:5],
+            }
+            for h in hypotheses
+        ]
     )
+
+    context = "\n\n".join(f"[{c['paper_id']}] {c['text'][:300]}" for c in chunks[:15])
 
     resp = await llm.generate(
         messages=[
@@ -263,11 +267,7 @@ async def check_contradictions(state: dict[str, Any]) -> dict[str, Any]:
     except json.JSONDecodeError:
         findings = []
 
-    weakened = [
-        f["hypothesis_id"]
-        for f in findings
-        if f.get("severity") == "high"
-    ]
+    weakened = [f["hypothesis_id"] for f in findings if f.get("severity") == "high"]
 
     return {
         "counterevidence_findings": findings,

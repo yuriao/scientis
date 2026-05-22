@@ -1,15 +1,14 @@
 """Claim and evidence models for scientific understanding."""
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
 class EvidenceSpan(BaseModel):
     """A span of evidence in the source paper."""
+
     type: str  # "text" | "figure" | "table"
-    span_start: Optional[int] = None
-    span_end: Optional[int] = None
+    span_start: int | None = None
+    span_end: int | None = None
     quote: str = ""
     figure_id: str = ""
     panel: str = ""
@@ -18,6 +17,7 @@ class EvidenceSpan(BaseModel):
 
 class Claim(BaseModel):
     """A structured claim extracted from a paper."""
+
     claim_id: str = Field(..., description="Canonical claim ID (e.g. c-abc123)")
     paper_id: str
     claim: str  # The claim text

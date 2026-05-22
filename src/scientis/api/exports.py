@@ -15,9 +15,7 @@ async def export_report(req: ExportRequest):
 
     # Get current state from checkpointer
     try:
-        state = await runner._workflow.aget_state(
-            {"configurable": {"thread_id": req.session_id}}
-        )
+        state = await runner._workflow.aget_state({"configurable": {"thread_id": req.session_id}})
         if not state or not state.values:
             raise HTTPException(404, f"Session {req.session_id} not found")
 
@@ -45,9 +43,7 @@ async def export_slides(req: ExportRequest):
     runner = get_runner()
 
     try:
-        state = await runner._workflow.aget_state(
-            {"configurable": {"thread_id": req.session_id}}
-        )
+        state = await runner._workflow.aget_state({"configurable": {"thread_id": req.session_id}})
         if not state or not state.values:
             raise HTTPException(404, f"Session {req.session_id} not found")
 
@@ -69,7 +65,7 @@ async def export_slides(req: ExportRequest):
 def _build_report(question: str, hypotheses: list[dict]) -> str:
     """Build a markdown report from hypotheses."""
     parts = [
-        f"# Scientific Discovery Report\n\n",
+        "# Scientific Discovery Report\n\n",
         f"## Question\n{question}\n\n",
     ]
     for i, h in enumerate(hypotheses, 1):

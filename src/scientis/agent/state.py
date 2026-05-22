@@ -1,7 +1,7 @@
 """Agent state schema for the LangGraph scientific discovery workflow."""
 
 from dataclasses import dataclass
-from typing import Optional, TypedDict
+from typing import TypedDict
 
 
 class AgentState(TypedDict, total=False):
@@ -22,7 +22,7 @@ class AgentState(TypedDict, total=False):
     evidence_count: int
 
     # Evidence compilation
-    comparison_set: list[dict]   # cross-paper evidence matrix
+    comparison_set: list[dict]  # cross-paper evidence matrix
     supporting_papers: list[str]
     conflicting_papers: list[str]
 
@@ -40,8 +40,8 @@ class AgentState(TypedDict, total=False):
     reviewed_by: str
 
     # Output
-    status: str           # running | awaiting_review | completed | error
-    final_report: Optional[str]
+    status: str  # running | awaiting_review | completed | error
+    final_report: str | None
     error_message: str
 
     # Metadata
@@ -52,8 +52,9 @@ class AgentState(TypedDict, total=False):
 @dataclass
 class WorkflowConfig:
     """Configuration for the discovery workflow."""
+
     max_retrieval_chunks: int = 50
     max_hypotheses: int = 5
     confidence_threshold: float = 0.3
     require_human_review: bool = True
-    model_tier: str = "cheap"   # cheap | local | heavy
+    model_tier: str = "cheap"  # cheap | local | heavy

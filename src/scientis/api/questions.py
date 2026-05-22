@@ -3,7 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from scientis.agent import get_runner
@@ -11,7 +11,6 @@ from scientis.agent.state import WorkflowConfig
 from scientis.api.deps import get_db
 from scientis.models.db_models import DiscoverySessionRecord
 from scientis.models.question import (
-    ExportRequest,
     HypothesisGenerateRequest,
     QuestionRequest,
     QuestionResponse,
@@ -57,7 +56,7 @@ async def ask_question(
             hypotheses = result.get("ranked_hypotheses", [])
             report = result.get("final_report")
             evidence_count = result.get("evidence_count", 0)
-        except Exception as e:
+        except Exception:
             status, hypotheses, report, evidence_count = "error", [], None, 0
 
         async with get_session_factory()() as session:
@@ -105,9 +104,7 @@ async def submit_review(
         raise HTTPException(404, f"Session {req.session_id} not found")
 
     runner = get_runner()
-    new_state = await runner.resume_with_review(
-        req.session_id, req.decisions, req.reviewer
-    )
+    new_state = await runner.resume_with_review(req.session_id, req.decisions, req.reviewer)
 
     await db.execute(
         update(DiscoverySessionRecord)

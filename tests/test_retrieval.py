@@ -1,7 +1,5 @@
 """Unit tests for the hybrid retriever."""
 
-import pytest
-
 from scientis.services.retrieval import HybridRetriever
 
 

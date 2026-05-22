@@ -8,7 +8,8 @@ Supports:
 
 import logging
 import uuid
-from typing import Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 class DiscoveryRunner:
     """Runs the scientific discovery workflow."""
 
-    def __init__(self, config: Optional[WorkflowConfig] = None):
+    def __init__(self, config: WorkflowConfig | None = None):
         self.config = config or WorkflowConfig()
         self._memory = MemorySaver()
         self._workflow = build_workflow().compile(checkpointer=self._memory)
@@ -54,9 +55,7 @@ class DiscoveryRunner:
             "model_tier_used": self.config.model_tier,
         }
 
-    async def run(
-        self, question: str, session_id: Optional[str] = None
-    ) -> dict[str, Any]:
+    async def run(self, question: str, session_id: str | None = None) -> dict[str, Any]:
         """Run the workflow to completion (or until human review is required).
 
         Returns the final AgentState as a plain dict. If the workflow pauses
@@ -77,7 +76,7 @@ class DiscoveryRunner:
             return {**initial_state, "status": "error", "error_message": str(e)}
 
     async def stream(
-        self, question: str, session_id: Optional[str] = None
+        self, question: str, session_id: str | None = None
     ) -> AsyncIterator[dict[str, Any]]:
         """Run the workflow and yield a state snapshot after each node completes."""
         if session_id is None:
@@ -114,7 +113,7 @@ class DiscoveryRunner:
             return {"status": "error", "error_message": str(e)}
 
 
-_runner: Optional[DiscoveryRunner] = None
+_runner: DiscoveryRunner | None = None
 
 
 def get_runner() -> DiscoveryRunner:

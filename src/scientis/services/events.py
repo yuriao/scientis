@@ -33,4 +33,9 @@ class EventBus:
 
 
 # Re-export event models for convenience
-from scientis.models.events import ClaimExtracted, HypothesisGenerated, PaperParsed, PaperUploaded  # noqa: E402, F401
+from scientis.models.events import (  # noqa: E402, F401
+    ClaimExtracted,
+    HypothesisGenerated,
+    PaperParsed,
+    PaperUploaded,
+)

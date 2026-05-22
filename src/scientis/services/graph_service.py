@@ -9,7 +9,6 @@ Handles:
 """
 
 import logging
-from typing import Optional
 
 from neo4j import AsyncDriver
 
@@ -37,7 +36,7 @@ class GraphService:
         "Assay": "Assay",
     }
 
-    def __init__(self, driver: Optional[AsyncDriver] = None):
+    def __init__(self, driver: AsyncDriver | None = None):
         self._driver = driver
 
     @property
@@ -139,7 +138,7 @@ class GraphService:
         self,
         name: str,
         entity_type: str,
-        aliases: Optional[list[str]] = None,
+        aliases: list[str] | None = None,
     ) -> None:
         """Create or update a canonical entity node."""
         label = self.ENTITY_LABELS.get(entity_type, "Entity")
@@ -172,9 +171,7 @@ class GraphService:
 
     # ── Cross-paper queries ──────────────────────────────────────────────────
 
-    async def find_supporting_claims(
-        self, entity_name: str, limit: int = 20
-    ) -> list[dict]:
+    async def find_supporting_claims(self, entity_name: str, limit: int = 20) -> list[dict]:
         """Return claims that mention an entity, ordered by confidence."""
         async with self.driver.session() as session:
             result = await session.run(
@@ -193,9 +190,7 @@ class GraphService:
             )
             return [record.data() async for record in result]
 
-    async def find_contradicting_claims(
-        self, entity_name: str, limit: int = 20
-    ) -> list[dict]:
+    async def find_contradicting_claims(self, entity_name: str, limit: int = 20) -> list[dict]:
         """Return claims about an entity that carry contradicting text."""
         async with self.driver.session() as session:
             result = await session.run(
@@ -216,9 +211,7 @@ class GraphService:
 
     # ── Subgraph retrieval ──────────────────────────────────────────────────
 
-    async def get_mechanism_subgraph(
-        self, disease_names: list[str], max_nodes: int = 100
-    ) -> dict:
+    async def get_mechanism_subgraph(self, disease_names: list[str], max_nodes: int = 100) -> dict:
         """Retrieve claims linking diseases to other entities."""
         async with self.driver.session() as session:
             result = await session.run(
@@ -312,7 +305,7 @@ class GraphService:
 
 # ── Module-level singleton ───────────────────────────────────────────────
 
-_graph_service: Optional[GraphService] = None
+_graph_service: GraphService | None = None
 
 
 def get_graph_service() -> GraphService:

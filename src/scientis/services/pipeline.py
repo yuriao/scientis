@@ -11,7 +11,8 @@ into indexed, queryable knowledge:
 
 import json
 import logging
-from typing import Callable, Coroutine, Optional
+from collections.abc import Callable, Coroutine
+from typing import Optional
 
 from scientis.config import Settings
 from scientis.services.graph_service import get_graph_service
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 _CHUNK_SIZE = 1000  # characters per retrieval chunk
 
 # Optional callback type: async (paper_id, status) -> None
-StatusCallback = Optional[Callable[[str, str], Coroutine]]
+StatusCallback = Optional[Callable[[str, str], Coroutine]]  # noqa: UP045
 
 
 async def run_pipeline(
@@ -53,7 +54,9 @@ async def run_pipeline(
         parse_result = await parse_paper(paper_id, store, settings)
         logger.info(
             "Parsed %s: %d pages, %d figures",
-            paper_id, parse_result["pages"], parse_result["figures"],
+            paper_id,
+            parse_result["pages"],
+            parse_result["figures"],
         )
 
         # 2. Extract structured claims via LLM
@@ -78,7 +81,7 @@ async def run_pipeline(
 
         await _update("ready")
 
-    except Exception as e:
+    except Exception:
         logger.exception("Pipeline failed for paper %s", paper_id)
         await _update("error")
         raise
@@ -93,12 +96,14 @@ def _build_chunks(paper_id: str, pages: list[dict]) -> list[dict]:
         for i in range(0, len(text), _CHUNK_SIZE):
             chunk_text = text[i : i + _CHUNK_SIZE].strip()
             if chunk_text:
-                chunks.append({
-                    "chunk_id": f"{paper_id}-p{page_num}-c{i // _CHUNK_SIZE}",
-                    "paper_id": paper_id,
-                    "text": chunk_text,
-                    "section": f"page_{page_num}",
-                    "entities": [],
-                    "figure_ids": [],
-                })
+                chunks.append(
+                    {
+                        "chunk_id": f"{paper_id}-p{page_num}-c{i // _CHUNK_SIZE}",
+                        "paper_id": paper_id,
+                        "text": chunk_text,
+                        "section": f"page_{page_num}",
+                        "entities": [],
+                        "figure_ids": [],
+                    }
+                )
     return chunks

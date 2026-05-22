@@ -6,7 +6,6 @@ Uses pymupdf for text extraction and figure cropping.
 
 import json
 import logging
-from pathlib import Path
 
 from scientis.config import Settings
 from scientis.storage.object_store import ObjectStore
@@ -36,11 +35,13 @@ async def parse_paper(paper_id: str, store: ObjectStore, settings: Settings) -> 
     pages = []
     for page_num, page in enumerate(doc):
         text = page.get_text("text")
-        pages.append({
-            "page_num": page_num + 1,
-            "text": text,
-            "char_count": len(text),
-        })
+        pages.append(
+            {
+                "page_num": page_num + 1,
+                "text": text,
+                "char_count": len(text),
+            }
+        )
 
     # ── Extract figures ──────────────────────────────
     figures = []
@@ -52,28 +53,36 @@ async def parse_paper(paper_id: str, store: ObjectStore, settings: Settings) -> 
             image_bytes = base_image["image"]
             ext = base_image["ext"]
 
-            fig_key = f"papers/{paper_id}/figures/page{page_num+1}_img{img_idx}.{ext}"
+            fig_key = f"papers/{paper_id}/figures/page{page_num + 1}_img{img_idx}.{ext}"
             store.put(fig_key, image_bytes)
 
-            figures.append({
-                "figure_id": f"fig-{paper_id}-{page_num+1}-{img_idx}",
-                "page_num": page_num + 1,
-                "storage_key": fig_key,
-                "width": base_image["width"],
-                "height": base_image["height"],
-                "ext": ext,
-            })
+            figures.append(
+                {
+                    "figure_id": f"fig-{paper_id}-{page_num + 1}-{img_idx}",
+                    "page_num": page_num + 1,
+                    "storage_key": fig_key,
+                    "width": base_image["width"],
+                    "height": base_image["height"],
+                    "ext": ext,
+                }
+            )
 
     doc.close()
 
     # ── Save artifacts to object store ───────────────
     text_json = json.dumps({"pages": pages, "total_pages": len(pages)}, indent=2)
-    store.put(f"papers/{paper_id}/artifacts/paper_text.json", text_json.encode(),
-              content_type="application/json")
+    store.put(
+        f"papers/{paper_id}/artifacts/paper_text.json",
+        text_json.encode(),
+        content_type="application/json",
+    )
 
     figures_json = json.dumps({"figures": figures, "total_figures": len(figures)}, indent=2)
-    store.put(f"papers/{paper_id}/artifacts/figures.json", figures_json.encode(),
-              content_type="application/json")
+    store.put(
+        f"papers/{paper_id}/artifacts/figures.json",
+        figures_json.encode(),
+        content_type="application/json",
+    )
 
     # Placeholder artifacts (filled by understanding layer later)
     for artifact in ["tables.json", "layout.json", "citations.json"]:
@@ -85,6 +94,8 @@ async def parse_paper(paper_id: str, store: ObjectStore, settings: Settings) -> 
 
     logger.info(
         "Paper parsed: %s — %d pages, %d figures",
-        paper_id, len(pages), len(figures),
+        paper_id,
+        len(pages),
+        len(figures),
     )
     return {"pages": len(pages), "figures": len(figures)}

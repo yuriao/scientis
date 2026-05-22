@@ -7,7 +7,6 @@ Uses tiered LLM: cheap for figure captions, local/heavy for claim extraction.
 import json
 import logging
 import uuid
-from typing import Optional
 
 from scientis.llm import LLMClient, ModelTier, get_llm
 from scientis.llm.schemas import CLAIM_EXTRACTION_SCHEMA, ENTITY_CANONICALIZATION_SCHEMA
@@ -20,7 +19,7 @@ logger = logging.getLogger(__name__)
 async def extract_claims(
     paper_id: str,
     store: ObjectStore,
-    llm: Optional[LLMClient] = None,
+    llm: LLMClient | None = None,
 ) -> list[Claim]:
     """Extract structured claims from a parsed paper.
 
@@ -70,39 +69,50 @@ async def extract_claims(
             for c in data.get("claims", []):
                 evidence_spans = []
                 for es in c.get("evidence_spans", []):
-                    evidence_spans.append(EvidenceSpan(
-                        type=es.get("type", "text"),
-                        quote=es.get("quote", ""),
-                        figure_id=es.get("figure_id", ""),
-                        panel=es.get("panel", ""),
-                    ))
+                    evidence_spans.append(
+                        EvidenceSpan(
+                            type=es.get("type", "text"),
+                            quote=es.get("quote", ""),
+                            figure_id=es.get("figure_id", ""),
+                            panel=es.get("panel", ""),
+                        )
+                    )
 
                 claim_id = f"c-{uuid.uuid4().hex[:12]}"
-                all_claims.append(Claim(
-                    claim_id=claim_id,
-                    paper_id=paper_id,
-                    claim=c["claim"],
-                    section=c.get("section", ""),
-                    evidence=evidence_spans,
-                    entities=c.get("entities", []),
-                    confidence=c.get("confidence", 0.5),
-                    contradicting_evidence=[
-                        EvidenceSpan(type="text", quote=c["contradicting_text"])
-                    ] if c.get("contradicting_text") else [],
-                ))
+                all_claims.append(
+                    Claim(
+                        claim_id=claim_id,
+                        paper_id=paper_id,
+                        claim=c["claim"],
+                        section=c.get("section", ""),
+                        evidence=evidence_spans,
+                        entities=c.get("entities", []),
+                        confidence=c.get("confidence", 0.5),
+                        contradicting_evidence=[
+                            EvidenceSpan(type="text", quote=c["contradicting_text"])
+                        ]
+                        if c.get("contradicting_text")
+                        else [],
+                    )
+                )
 
         except Exception:
             logger.exception("Claim extraction failed for chunk %d of %s", i, paper_id)
             continue
 
-    logger.info("Extracted %d claims from paper %s (%d chunks)", len(all_claims), paper_id, len(chunks))
+    logger.info(
+        "Extracted %d claims from paper %s (%d chunks)",
+        len(all_claims),
+        paper_id,
+        len(chunks),
+    )
     return all_claims
 
 
 async def canonicalize_entity(
     entity_name: str,
     entity_type: str,
-    llm: Optional[LLMClient] = None,
+    llm: LLMClient | None = None,
 ) -> dict:
     """Canonicalize an entity name using LLM (resolve synonyms)."""
     if llm is None:

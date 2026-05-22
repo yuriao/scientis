@@ -1,7 +1,7 @@
 """FastAPI application factory."""
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         password=settings.neo4j_password,
     )
     from scientis.graph.schema import ensure_schema
+
     await ensure_schema()
 
     yield

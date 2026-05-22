@@ -9,15 +9,14 @@ Tiers:
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
-class ModelTier(str, Enum):
-    cheap = "cheap"   # GPT-4o mini
-    local = "local"   # vLLM (open-weight)
-    heavy = "heavy"   # Gemini Flash
+class ModelTier(str, Enum):  # noqa: UP042
+    cheap = "cheap"  # GPT-4o mini
+    local = "local"  # vLLM (open-weight)
+    heavy = "heavy"  # Gemini Flash
 
 
 @dataclass
@@ -58,6 +57,7 @@ class LLMClient:
     def openai(self):
         if self._openai_client is None:
             from openai import AsyncOpenAI
+
             self._openai_client = AsyncOpenAI(
                 api_key=self._openai_key,
                 base_url=self._openai_base or None,
@@ -68,6 +68,7 @@ class LLMClient:
     def vllm(self):
         if self._vllm_client is None:
             from openai import AsyncOpenAI
+
             self._vllm_client = AsyncOpenAI(
                 api_key="not-needed",
                 base_url=self._vllm_base,
@@ -78,6 +79,7 @@ class LLMClient:
     def gemini(self):
         if self._gemini_client is None:
             from google import genai
+
             self._gemini_client = genai.Client(api_key=self._gemini_key)
         return self._gemini_client
 
@@ -87,7 +89,7 @@ class LLMClient:
         self,
         messages: list[dict],
         tier: ModelTier = ModelTier.cheap,
-        response_format: Optional[dict] = None,
+        response_format: dict | None = None,
         max_tokens: int = 2048,
         temperature: float = 0.1,
     ) -> LLMResponse:
@@ -104,7 +106,7 @@ class LLMClient:
         self,
         messages: list[dict],
         model: str,
-        response_format: Optional[dict],
+        response_format: dict | None,
         max_tokens: int,
         temperature: float,
     ) -> LLMResponse:
@@ -127,7 +129,7 @@ class LLMClient:
     async def _generate_vllm(
         self,
         messages: list[dict],
-        response_format: Optional[dict],
+        response_format: dict | None,
         max_tokens: int,
         temperature: float,
     ) -> LLMResponse:
@@ -202,13 +204,14 @@ class LLMClient:
 
 # ── Module-level singleton ─────────────────────────────────────────────────
 
-_llm_pool: Optional[LLMClient] = None
+_llm_pool: LLMClient | None = None
 
 
 def get_llm() -> LLMClient:
     global _llm_pool
     if _llm_pool is None:
         from scientis.config import get_settings
+
         s = get_settings()
         _llm_pool = LLMClient(
             openai_api_key=s.openai_api_key,

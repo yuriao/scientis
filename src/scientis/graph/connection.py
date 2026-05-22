@@ -1,13 +1,12 @@
 """Neo4j async driver management."""
 
 import logging
-from typing import Optional
 
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
 logger = logging.getLogger(__name__)
 
-_driver: Optional[AsyncDriver] = None
+_driver: AsyncDriver | None = None
 
 
 def init_driver(uri: str, user: str, password: str) -> AsyncDriver:

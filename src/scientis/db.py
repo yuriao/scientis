@@ -8,7 +8,7 @@ Usage in FastAPI endpoints:
 """
 
 import logging
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -31,6 +31,7 @@ def get_engine():
     global _engine
     if _engine is None:
         from scientis.config import get_settings
+
         _engine = create_async_engine(
             get_settings().database_url,
             echo=False,

@@ -34,9 +34,7 @@ async def client(app):
 
 @pytest.mark.asyncio
 async def test_health_returns_ok(client):
-    with patch(
-        "scientis.api.health.verify_connection", new_callable=AsyncMock, return_value=True
-    ):
+    with patch("scientis.api.health.verify_connection", new_callable=AsyncMock, return_value=True):
         response = await client.get("/v1/health")
     assert response.status_code == 200
     data = response.json()
@@ -48,9 +46,7 @@ async def test_health_returns_ok(client):
 @pytest.mark.asyncio
 async def test_health_when_neo4j_down(client):
     """Health endpoint should still return 200 even when Neo4j is unavailable."""
-    with patch(
-        "scientis.api.health.verify_connection", new_callable=AsyncMock, return_value=False
-    ):
+    with patch("scientis.api.health.verify_connection", new_callable=AsyncMock, return_value=False):
         response = await client.get("/v1/health")
     assert response.status_code == 200
     data = response.json()

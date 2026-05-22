@@ -32,23 +32,22 @@ async def human_review(state: AgentState) -> dict:
     hypotheses = state.get("ranked_hypotheses", [])
     weakened = state.get("weakened_hypotheses", [])
     config = state.get("config", {})
-    require_review = (
-        config.get("require_human_review", True) if isinstance(config, dict) else True
-    )
+    require_review = config.get("require_human_review", True) if isinstance(config, dict) else True
 
     novel_found = any(
-        h.get("confidence", 0) > 0.5 and h.get("hypothesis_id") not in weakened
-        for h in hypotheses
+        h.get("confidence", 0) > 0.5 and h.get("hypothesis_id") not in weakened for h in hypotheses
     )
 
     if require_review and novel_found:
         # Pause execution. Caller resumes with:
         #   Command(resume={"decisions": [...], "reviewer": "..."})
-        payload = interrupt({
-            "type": "review_required",
-            "hypotheses": hypotheses,
-            "message": "Review these hypotheses before publication.",
-        })
+        payload = interrupt(
+            {
+                "type": "review_required",
+                "hypotheses": hypotheses,
+                "message": "Review these hypotheses before publication.",
+            }
+        )
         decisions = payload.get("decisions", []) if isinstance(payload, dict) else []
         reviewer = payload.get("reviewer", "") if isinstance(payload, dict) else ""
         return {
