@@ -1,9 +1,9 @@
 """Neo4j graph CRUD service.
 
 Handles:
-  - Creating Paper/Claim/Entity/Hypothesis nodes
+  - Creating Paper / Claim / Entity / Hypothesis nodes
   - Connecting claims to papers (PRESENTS_CLAIM)
-  - Connecting evidence (SUPPORTS, CONTRADICTS)
+  - Recording supporting and contradicting evidence
   - Cross-paper entity canonicalization
   - Subgraph retrieval for agent queries
 """
@@ -13,7 +13,7 @@ from typing import Optional
 
 from neo4j import AsyncDriver
 
-from scientis.graph.schema import get_driver
+from scientis.graph.connection import get_driver
 from scientis.models.claim import Claim
 from scientis.models.hypothesis import Hypothesis
 from scientis.models.paper import PaperSummary
@@ -46,19 +46,19 @@ class GraphService:
             self._driver = get_driver()
         return self._driver
 
-    # ── Paper ──────────────────────────────────────────
+    # ── Paper ──────────────────────────────────────────────────────────────
 
     async def create_paper(self, paper: PaperSummary) -> None:
         async with self.driver.session() as session:
             await session.run(
                 """
                 MERGE (p:Paper {paper_id: $paper_id})
-                SET p.title = $title,
-                    p.doi = $doi,
-                    p.year = $year,
-                    p.journal = $journal,
-                    p.status = $status,
-                    p.checksum = $checksum,
+                SET p.title      = $title,
+                    p.doi        = $doi,
+                    p.year       = $year,
+                    p.journal    = $journal,
+                    p.status     = $status,
+                    p.checksum   = $checksum,
                     p.updated_at = datetime()
                 """,
                 paper_id=paper.paper_id,
@@ -70,21 +70,22 @@ class GraphService:
                 checksum=paper.checksum,
             )
 
-    # ── Claims ─────────────────────────────────────────
+    # ── Claims ───────────────────────────────────────────────────────────
 
     async def ingest_claims(self, paper_id: str, claims: list[Claim]) -> int:
-        """Ingest all claims and their evidence spans into the graph."""
+        """Ingest all claims into the graph and return the count stored."""
         count = 0
         async with self.driver.session() as session:
             for claim in claims:
+                # Merge the paper–claim relationship
                 await session.run(
                     """
                     MATCH (p:Paper {paper_id: $paper_id})
                     MERGE (c:Claim {claim_id: $claim_id})
-                    SET c.text = $text,
-                        c.section = $section,
-                        c.confidence = $confidence,
-                        c.updated_at = datetime()
+                    SET c.text               = $text,
+                        c.section            = $section,
+                        c.confidence         = $confidence,
+                        c.updated_at         = datetime()
                     MERGE (p)-[:PRESENTS_CLAIM]->(c)
                     """,
                     paper_id=paper_id,
@@ -94,7 +95,7 @@ class GraphService:
                     confidence=claim.confidence,
                 )
 
-                # Connect evidence spans as support edges
+                # Link figure evidence
                 for ev in claim.evidence:
                     if ev.figure_id:
                         await session.run(
@@ -102,7 +103,7 @@ class GraphService:
                             MATCH (c:Claim {claim_id: $claim_id})
                             MERGE (f:Figure {figure_id: $figure_id})
                             SET f.paper_id = $paper_id, f.panel = $panel
-                            MERGE (c)-[:SUPPORTS {type: 'figure', quote: $quote}]->(f)
+                            MERGE (c)-[:SUPPORTED_BY_FIGURE {quote: $quote}]->(f)
                             """,
                             claim_id=claim.claim_id,
                             figure_id=ev.figure_id,
@@ -111,23 +112,28 @@ class GraphService:
                             quote=ev.quote,
                         )
 
-                # Connect contradicting evidence
-                for ce in claim.contradicting_evidence:
-                    if ce.quote:
+                # Store contradicting text directly on the claim node
+                # (a self-loop relationship is semantically meaningless)
+                if claim.contradicting_evidence:
+                    contradicting_quotes = " | ".join(
+                        ce.quote for ce in claim.contradicting_evidence if ce.quote
+                    )
+                    if contradicting_quotes:
                         await session.run(
                             """
                             MATCH (c:Claim {claim_id: $claim_id})
-                            MERGE (c)-[:CONTRADICTS {type: 'text', quote: $quote}]->(c)
+                            SET c.contradicting_text = $text
                             """,
                             claim_id=claim.claim_id,
-                            quote=ce.quote,
+                            text=contradicting_quotes,
                         )
 
                 count += 1
+
         logger.info("Ingested %d claims for paper %s", count, paper_id)
         return count
 
-    # ── Entities ───────────────────────────────────────
+    # ── Entities ────────────────────────────────────────────────────────────
 
     async def create_entity(
         self,
@@ -142,8 +148,8 @@ class GraphService:
                 f"""
                 MERGE (e:{label} {{name: $name}})
                 SET e.entity_type = $entity_type,
-                    e.aliases = $aliases,
-                    e.updated_at = datetime()
+                    e.aliases     = $aliases,
+                    e.updated_at  = datetime()
                 """,
                 name=name,
                 entity_type=entity_type,
@@ -151,7 +157,7 @@ class GraphService:
             )
 
     async def link_claim_entities(self, claim_id: str, entities: list[str]) -> None:
-        """Link a claim to its mentioned entities (MENTIONS relationship)."""
+        """Link a claim to its mentioned entities via MENTIONS relationships."""
         async with self.driver.session() as session:
             for entity_name in entities:
                 await session.run(
@@ -164,18 +170,21 @@ class GraphService:
                     entity_name=entity_name,
                 )
 
-    # ── Cross-paper relationships ──────────────────────
+    # ── Cross-paper queries ──────────────────────────────────────────────────
 
     async def find_supporting_claims(
         self, entity_name: str, limit: int = 20
     ) -> list[dict]:
-        """Find claims about an entity from all papers."""
+        """Return claims that mention an entity, ordered by confidence."""
         async with self.driver.session() as session:
             result = await session.run(
                 """
                 MATCH (e {name: $name})<-[:MENTIONS]-(c:Claim)<-[:PRESENTS_CLAIM]-(p:Paper)
-                RETURN c.claim_id AS claim_id, c.text AS text, c.confidence AS confidence,
-                       p.paper_id AS paper_id, p.title AS paper_title
+                RETURN c.claim_id  AS claim_id,
+                       c.text      AS text,
+                       c.confidence AS confidence,
+                       p.paper_id  AS paper_id,
+                       p.title     AS paper_title
                 ORDER BY c.confidence DESC
                 LIMIT $limit
                 """,
@@ -187,13 +196,17 @@ class GraphService:
     async def find_contradicting_claims(
         self, entity_name: str, limit: int = 20
     ) -> list[dict]:
-        """Find claims that contradict findings about an entity."""
+        """Return claims about an entity that carry contradicting text."""
         async with self.driver.session() as session:
             result = await session.run(
                 """
-                MATCH (e {name: $name})<-[:MENTIONS]-(c:Claim)-[r:CONTRADICTS]->()
-                RETURN c.claim_id AS claim_id, c.text AS text, c.confidence AS confidence,
-                       r.quote AS contradiction
+                MATCH (e {name: $name})<-[:MENTIONS]-(c:Claim)<-[:PRESENTS_CLAIM]-(p:Paper)
+                WHERE c.contradicting_text IS NOT NULL AND c.contradicting_text <> ''
+                RETURN c.claim_id          AS claim_id,
+                       c.text              AS text,
+                       c.confidence        AS confidence,
+                       c.contradicting_text AS contradiction,
+                       p.paper_id          AS paper_id
                 LIMIT $limit
                 """,
                 name=entity_name,
@@ -201,23 +214,23 @@ class GraphService:
             )
             return [record.data() async for record in result]
 
-    # ── Subgraph retrieval ─────────────────────────────
+    # ── Subgraph retrieval ──────────────────────────────────────────────────
 
     async def get_mechanism_subgraph(
         self, disease_names: list[str], max_nodes: int = 100
     ) -> dict:
-        """Retrieve the mechanistic subgraph connecting diseases to entities."""
+        """Retrieve claims linking diseases to other entities."""
         async with self.driver.session() as session:
             result = await session.run(
                 """
-                MATCH (d:Disease)-[:MENTIONS*1..3]-(n)
+                MATCH (d:Disease)<-[:MENTIONS]-(c:Claim)<-[:PRESENTS_CLAIM]-(p:Paper)
                 WHERE d.name IN $diseases
-                WITH d, n, relationships() AS rels
-                RETURN d.name AS disease, collect(DISTINCT {
-                    id: id(n), labels: labels(n), properties: properties(n)
-                }) AS connected, collect(DISTINCT {
-                    source: id(startNode(r)), target: id(endNode(r)), type: type(r)
-                }) AS edges
+                RETURN d.name AS disease,
+                       collect(DISTINCT {
+                           claim_id: c.claim_id,
+                           text:     c.text,
+                           paper_id: p.paper_id
+                       }) AS claims
                 LIMIT $max_nodes
                 """,
                 diseases=disease_names,
@@ -227,16 +240,18 @@ class GraphService:
             return {"diseases": disease_names, "subgraph": records}
 
     async def get_evidence_trail(self, claim_id: str) -> dict:
-        """Get the full evidence trail for a claim (paper → claim → entities → figures)."""
+        """Return the full evidence chain for a claim (paper → claim → entities → figures)."""
         async with self.driver.session() as session:
             result = await session.run(
                 """
                 MATCH (p:Paper)-[:PRESENTS_CLAIM]->(c:Claim {claim_id: $claim_id})
                 OPTIONAL MATCH (c)-[:MENTIONS]->(e)
-                OPTIONAL MATCH (c)-[:SUPPORTS]->(f:Figure)
-                RETURN p.paper_id AS paper_id, p.title AS paper_title,
-                       c.text AS claim_text, c.confidence AS confidence,
-                       collect(DISTINCT e.name) AS entities,
+                OPTIONAL MATCH (c)-[:SUPPORTED_BY_FIGURE]->(f:Figure)
+                RETURN p.paper_id  AS paper_id,
+                       p.title     AS paper_title,
+                       c.text      AS claim_text,
+                       c.confidence AS confidence,
+                       collect(DISTINCT e.name)      AS entities,
                        collect(DISTINCT f.figure_id) AS figures
                 """,
                 claim_id=claim_id,
@@ -244,18 +259,18 @@ class GraphService:
             record = await result.single()
             return record.data() if record else {}
 
-    # ── Hypothesis ─────────────────────────────────────
+    # ── Hypothesis ───────────────────────────────────────────────────────────
 
     async def create_hypothesis(self, hypothesis: Hypothesis) -> None:
         async with self.driver.session() as session:
             await session.run(
                 """
                 MERGE (h:Hypothesis {hypothesis_id: $hypothesis_id})
-                SET h.mechanism = $mechanism,
+                SET h.mechanism   = $mechanism,
                     h.description = $description,
-                    h.confidence = $confidence,
-                    h.status = $status,
-                    h.created_at = datetime()
+                    h.confidence  = $confidence,
+                    h.status      = $status,
+                    h.created_at  = datetime()
                 """,
                 hypothesis_id=hypothesis.hypothesis_id,
                 mechanism=hypothesis.mechanism,
@@ -263,8 +278,6 @@ class GraphService:
                 confidence=hypothesis.confidence,
                 status=hypothesis.status,
             )
-
-            # Link supporting claims
             for cid in hypothesis.supporting_claims:
                 await session.run(
                     """
@@ -275,8 +288,6 @@ class GraphService:
                     hid=hypothesis.hypothesis_id,
                     cid=cid,
                 )
-
-            # Link contradicting claims
             for cid in hypothesis.contradicting_claims:
                 await session.run(
                     """
@@ -287,8 +298,6 @@ class GraphService:
                     hid=hypothesis.hypothesis_id,
                     cid=cid,
                 )
-
-            # Link entities
             for disease in hypothesis.diseases:
                 await session.run(
                     """
@@ -301,7 +310,8 @@ class GraphService:
                 )
 
 
-# Singleton
+# ── Module-level singleton ───────────────────────────────────────────────
+
 _graph_service: Optional[GraphService] = None
 
 
