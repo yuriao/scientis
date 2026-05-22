@@ -1,19 +1,11 @@
-"""Agent state schema for LangGraph workflow.
+"""Agent state schema for the LangGraph scientific discovery workflow."""
 
-The state flows through:
-  question → query_expansion → retrieval → evidence_compilation →
-  mechanism_induction → counterevidence → human_review → publish
-"""
-
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, TypedDict
-
-from scientis.models.hypothesis import Hypothesis
-from scientis.services.retrieval import RetrievalResult
 
 
 class AgentState(TypedDict, total=False):
-    """Typed state for the LangGraph agent workflow."""
+    """Typed state that flows through every node of the discovery workflow."""
 
     # Input
     question: str
@@ -30,7 +22,7 @@ class AgentState(TypedDict, total=False):
     evidence_count: int
 
     # Evidence compilation
-    comparison_set: list[dict]  # cross-paper evidence matrix
+    comparison_set: list[dict]   # cross-paper evidence matrix
     supporting_papers: list[str]
     conflicting_papers: list[str]
 
@@ -44,11 +36,11 @@ class AgentState(TypedDict, total=False):
 
     # Human review
     review_required: bool
-    review_decisions: list[dict]  # accept/reject/revise per hypothesis
+    review_decisions: list[dict]  # accept / reject / revise per hypothesis
     reviewed_by: str
 
     # Output
-    status: str  # "running" | "awaiting_review" | "completed" | "error"
+    status: str           # running | awaiting_review | completed | error
     final_report: Optional[str]
     error_message: str
 
@@ -59,9 +51,9 @@ class AgentState(TypedDict, total=False):
 
 @dataclass
 class WorkflowConfig:
-    """Configuration for the agent workflow."""
+    """Configuration for the discovery workflow."""
     max_retrieval_chunks: int = 50
     max_hypotheses: int = 5
     confidence_threshold: float = 0.3
     require_human_review: bool = True
-    model_tier: str = "cheap"  # cheap | local | heavy
+    model_tier: str = "cheap"   # cheap | local | heavy

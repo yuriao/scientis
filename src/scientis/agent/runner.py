@@ -1,17 +1,17 @@
-"""Agent runner — executes the LangGraph workflow.
+"""Agent runner — executes the LangGraph scientific discovery workflow.
 
 Supports:
-  - Synchronous streaming execution
-  - Human-in-the-loop checkpoints (pause/resume)
-  - Error recovery
+  - run()    — await a single result dict
+  - stream() — async-iterate over per-node events
+  - resume_with_review() — resume after human review via interrupt/Command
 """
 
-import asyncio
 import logging
 import uuid
 from typing import Any, AsyncIterator, Optional
 
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 
 from scientis.agent.graph import build_workflow
 from scientis.agent.state import AgentState, WorkflowConfig
@@ -27,17 +27,8 @@ class DiscoveryRunner:
         self._memory = MemorySaver()
         self._workflow = build_workflow().compile(checkpointer=self._memory)
 
-    async def run(
-        self, question: str, session_id: Optional[str] = None, stream: bool = False
-    ) -> dict[str, Any]:
-        """Run the full discovery workflow.
-
-        Returns the final AgentState dict.
-        """
-        if session_id is None:
-            session_id = f"sess-{uuid.uuid4().hex[:12]}"
-
-        initial_state: AgentState = {
+    def _make_initial_state(self, question: str, session_id: str) -> AgentState:
+        return {
             "question": question,
             "session_id": session_id,
             "expanded_queries": [],
@@ -63,63 +54,66 @@ class DiscoveryRunner:
             "model_tier_used": self.config.model_tier,
         }
 
+    async def run(
+        self, question: str, session_id: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Run the workflow to completion (or until human review is required).
+
+        Returns the final AgentState as a plain dict. If the workflow pauses
+        at the human_review node, status will be 'awaiting_review' and the
+        caller should call resume_with_review() to continue.
+        """
+        if session_id is None:
+            session_id = f"sess-{uuid.uuid4().hex[:12]}"
+
+        initial_state = self._make_initial_state(question, session_id)
         thread_config = {"configurable": {"thread_id": session_id}}
 
         try:
-            if stream:
-                result_state = initial_state
-                async for event in self._workflow.astream(
-                    initial_state, thread_config
-                ):
-                    for node_name, node_output in event.items():
-                        result_state.update(node_output)
-                        yield {"node": node_name, "state": dict(result_state)}
-            else:
-                result_state = await self._workflow.ainvoke(
-                    initial_state, thread_config
-                )
-                return dict(result_state) if result_state else initial_state
-        except Exception:
+            result = await self._workflow.ainvoke(initial_state, thread_config)
+            return dict(result) if result else initial_state
+        except Exception as e:
             logger.exception("Workflow failed for session %s", session_id)
-            return {**initial_state, "status": "error", "error_message": str(Exception)}
+            return {**initial_state, "status": "error", "error_message": str(e)}
+
+    async def stream(
+        self, question: str, session_id: Optional[str] = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Run the workflow and yield a state snapshot after each node completes."""
+        if session_id is None:
+            session_id = f"sess-{uuid.uuid4().hex[:12]}"
+
+        initial_state = self._make_initial_state(question, session_id)
+        thread_config = {"configurable": {"thread_id": session_id}}
+        accumulated = dict(initial_state)
+
+        async for event in self._workflow.astream(initial_state, thread_config):
+            for node_name, node_output in event.items():
+                accumulated.update(node_output)
+                yield {"node": node_name, "state": dict(accumulated)}
 
     async def resume_with_review(
-        self, session_id: str, review_decisions: list[dict], reviewer: str = ""
+        self,
+        session_id: str,
+        review_decisions: list[dict],
+        reviewer: str = "",
     ) -> dict[str, Any]:
-        """Resume a paused workflow with human review decisions."""
+        """Resume a workflow that is paused at the human_review interrupt.
+
+        review_decisions: list of {hypothesis_id, action: accept|reject|revise, comment}
+        """
         thread_config = {"configurable": {"thread_id": session_id}}
-
-        update = {
-            "review_decisions": review_decisions,
-            "reviewed_by": reviewer,
-        }
-
-        result_state = await self._workflow.ainvoke(
-            update, thread_config
-        )
-        return dict(result_state) if result_state else {}
-
-    def run_sync(self, question: str, session_id: Optional[str] = None) -> dict[str, Any]:
-        """Synchronous wrapper for run()."""
-        result = None
-
-        async def _run():
-            nonlocal result
-            final = await self.run(question, session_id)
-            # If streaming generator, consume it
-            if hasattr(final, "__aiter__"):
-                state = {}
-                async for event in final:
-                    state.update(event.get("state", {}))
-                result = state
-            else:
-                result = final
-
-        asyncio.run(_run())
-        return result or {}
+        try:
+            result = await self._workflow.ainvoke(
+                Command(resume={"decisions": review_decisions, "reviewer": reviewer}),
+                thread_config,
+            )
+            return dict(result) if result else {}
+        except Exception as e:
+            logger.exception("Workflow resume failed for session %s", session_id)
+            return {"status": "error", "error_message": str(e)}
 
 
-# Singleton
 _runner: Optional[DiscoveryRunner] = None
 
 

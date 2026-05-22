@@ -1,7 +1,7 @@
 """Agent tools for the LangGraph scientific discovery workflow.
 
-Each tool is a callable that reads/writes the AgentState.
-Designed to be used as LangGraph tool nodes.
+Each tool is an async callable that receives the current AgentState dict
+and returns a partial state update.
 """
 
 import json
@@ -11,25 +11,16 @@ from typing import Any
 
 from scientis.llm import ModelTier, get_llm
 from scientis.llm.schemas import MECHANISM_INDUCTION_SCHEMA
-from scientis.services.retrieval import HybridRetriever
+from scientis.services.retrieval import get_retriever
 
 logger = logging.getLogger(__name__)
 
-# ── Shared retriever instance ──────────────────────
-_retriever: HybridRetriever | None = None
 
-
-def get_retriever() -> HybridRetriever:
-    global _retriever
-    if _retriever is None:
-        _retriever = HybridRetriever()
-    return _retriever
-
-
-# ── Tool: Expand Query ─────────────────────────────
+# ── Tool: Expand Query ───────────────────────────────────────────────
 
 async def expand_query(state: dict[str, Any]) -> dict[str, Any]:
-    """Expand user question with disease synonyms, mechanism synonyms."""
+    """Expand the user's question with disease synonyms, mechanism synonyms,
+    and reformulated search queries to improve retrieval coverage."""
     question = state["question"]
     llm = get_llm()
 
@@ -42,7 +33,7 @@ async def expand_query(state: dict[str, Any]) -> dict[str, Any]:
                     "Given a scientific question, return: "
                     "1) Disease synonyms (abbreviations, related conditions) "
                     "2) Mechanism synonyms (alternative terms for biological processes) "
-                    "3) Reformulated search queries optimized for retrieval.\n"
+                    "3) Reformulated search queries optimised for retrieval.\n"
                     "Output as JSON: {diseases: [...], mechanisms: [...], queries: [...]}"
                 ),
             },
@@ -65,16 +56,16 @@ async def expand_query(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ── Tool: Retrieve Context ─────────────────────────
+# ── Tool: Retrieve Context ───────────────────────────────────────────
 
 async def retrieve_context(state: dict[str, Any]) -> dict[str, Any]:
-    """Hybrid retrieval across all indexed papers."""
+    """Hybrid retrieval (BM25 + vector + graph) across all indexed papers."""
     queries = state.get("expanded_queries", [state["question"]])
     retriever = get_retriever()
 
-    all_chunks = []
-    for q in queries[:3]:
-        results = await retriever.retrieve(q, top_k=20)
+    all_chunks: list[dict] = []
+    for query in queries[:3]:
+        results = await retriever.retrieve(query, top_k=20)
         for r in results:
             all_chunks.append({
                 "chunk_id": r.chunk_id,
@@ -87,28 +78,27 @@ async def retrieve_context(state: dict[str, Any]) -> dict[str, Any]:
                 "figure_ids": r.figure_ids,
             })
 
-    # Deduplicate by chunk_id
-    seen = set()
-    unique = []
-    for c in all_chunks:
-        if c["chunk_id"] not in seen:
-            seen.add(c["chunk_id"])
-            unique.append(c)
+    # Deduplicate by chunk_id, keep highest score
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for chunk in all_chunks:
+        if chunk["chunk_id"] not in seen:
+            seen.add(chunk["chunk_id"])
+            unique.append(chunk)
 
     unique.sort(key=lambda x: x["score"], reverse=True)
+
     config = state.get("config", {})
     max_chunks = config.get("max_retrieval_chunks", 50) if isinstance(config, dict) else 50
+    top_chunks = unique[:max_chunks]
 
-    return {
-        "retrieved_chunks": unique[:max_chunks],
-        "evidence_count": len(unique[:max_chunks]),
-    }
+    return {"retrieved_chunks": top_chunks, "evidence_count": len(top_chunks)}
 
 
-# ── Tool: Compile Evidence ─────────────────────────
+# ── Tool: Compile Evidence ────────────────────────────────────────────
 
 async def compile_evidence(state: dict[str, Any]) -> dict[str, Any]:
-    """Build comparison set: what claims support vs conflict across papers."""
+    """Build a cross-paper comparison matrix: which papers support vs conflict."""
     chunks = state.get("retrieved_chunks", [])
     question = state["question"]
     llm = get_llm()
@@ -116,7 +106,6 @@ async def compile_evidence(state: dict[str, Any]) -> dict[str, Any]:
     if not chunks:
         return {"comparison_set": [], "supporting_papers": [], "conflicting_papers": []}
 
-    # Build context string from top chunks
     context = "\n\n---\n\n".join(
         f"[{c['paper_id']}] ({c.get('section', '?')}) {c['text'][:500]}"
         for c in chunks[:15]
@@ -127,11 +116,11 @@ async def compile_evidence(state: dict[str, Any]) -> dict[str, Any]:
             {
                 "role": "system",
                 "content": (
-                    "You are a scientific evidence compiler. Analyze the provided "
-                    "paper excerpts and classify each paper's position relative to "
-                    "the user's question. Output JSON:\n"
+                    "You are a scientific evidence compiler. Analyse the paper excerpts "
+                    "and classify each paper's position relative to the user's question. "
+                    "Output JSON:\n"
                     "{comparison: [{paper_id, position: supports|conflicts|neutral, "
-                    "summary, key_claims: [...]}], cross_cutting_themes: [...]}"
+                    "summary, key_claims: [...]}], cross_cutting_themes: []}"
                 ),
             },
             {
@@ -160,7 +149,7 @@ async def compile_evidence(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ── Tool: Induce Mechanism ─────────────────────────
+# ── Tool: Induce Mechanism ───────────────────────────────────────────
 
 async def induce_mechanism(state: dict[str, Any]) -> dict[str, Any]:
     """Cluster evidence into shared mechanistic themes and generate hypotheses."""
@@ -173,8 +162,7 @@ async def induce_mechanism(state: dict[str, Any]) -> dict[str, Any]:
         return {"hypotheses": [], "ranked_hypotheses": []}
 
     context = "\n\n".join(
-        f"PAPER {c['paper_id']}: {c['text'][:400]}"
-        for c in chunks[:20]
+        f"PAPER {c['paper_id']}: {c['text'][:400]}" for c in chunks[:20]
     )
     comparison_text = json.dumps(comparison[:10], indent=2)
 
@@ -188,7 +176,7 @@ async def induce_mechanism(state: dict[str, Any]) -> dict[str, Any]:
                     "induce shared mechanisms that explain the observations. "
                     "For each mechanism, provide supporting and contradicting claims, "
                     "affected diseases/genes/pathways, confidence, next experiments, "
-                    "and knowledge gaps. Be rigorous: identify where evidence is weak."
+                    "and knowledge gaps. Be rigorous: flag where evidence is weak."
                 ),
             },
             {
@@ -212,11 +200,9 @@ async def induce_mechanism(state: dict[str, Any]) -> dict[str, Any]:
     except json.JSONDecodeError:
         hypotheses = []
 
-    # Assign hypothesis IDs
     for h in hypotheses:
         h["hypothesis_id"] = f"h-{uuid.uuid4().hex[:12]}"
 
-    # Rank by confidence
     hypotheses.sort(key=lambda h: h.get("confidence", 0), reverse=True)
 
     return {
@@ -225,10 +211,10 @@ async def induce_mechanism(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ── Tool: Check Contradictions ─────────────────────
+# ── Tool: Check Contradictions ─────────────────────────────────────────
 
 async def check_contradictions(state: dict[str, Any]) -> dict[str, Any]:
-    """Force the agent to find evidence that weakens each hypothesis."""
+    """Force the agent to find evidence that weakens each ranked hypothesis."""
     hypotheses = state.get("ranked_hypotheses", [])
     chunks = state.get("retrieved_chunks", [])
     llm = get_llm()
@@ -236,11 +222,14 @@ async def check_contradictions(state: dict[str, Any]) -> dict[str, Any]:
     if not hypotheses:
         return {"counterevidence_findings": [], "weakened_hypotheses": []}
 
-    hp_text = json.dumps([{
-        "id": h.get("hypothesis_id"),
-        "mechanism": h.get("mechanism"),
-        "claims": h.get("supporting_claims", [])[:5],
-    } for h in hypotheses])
+    hp_text = json.dumps([
+        {
+            "id": h.get("hypothesis_id"),
+            "mechanism": h.get("mechanism"),
+            "claims": h.get("supporting_claims", [])[:5],
+        }
+        for h in hypotheses
+    ])
 
     context = "\n\n".join(
         f"[{c['paper_id']}] {c['text'][:300]}" for c in chunks[:15]
@@ -251,7 +240,7 @@ async def check_contradictions(state: dict[str, Any]) -> dict[str, Any]:
             {
                 "role": "system",
                 "content": (
-                    "You are a scientific skeptic. For each hypothesis, find evidence "
+                    "You are a scientific sceptic. For each hypothesis, find evidence "
                     "that weakens or contradicts it. Consider: methodological limitations, "
                     "conflicting results, alternative explanations, publication bias, "
                     "sample size issues. Output JSON:\n"
@@ -275,35 +264,12 @@ async def check_contradictions(state: dict[str, Any]) -> dict[str, Any]:
         findings = []
 
     weakened = [
-        f["hypothesis_id"] for f in findings
+        f["hypothesis_id"]
+        for f in findings
         if f.get("severity") == "high"
     ]
 
     return {
         "counterevidence_findings": findings,
         "weakened_hypotheses": weakened,
-    }
-
-
-# ── Tool: Human Review Gate ────────────────────────
-
-async def human_review_gate(state: dict[str, Any]) -> dict[str, Any]:
-    """Decide if human review is needed, and pause if so."""
-    hypotheses = state.get("ranked_hypotheses", [])
-    weakened = state.get("weakened_hypotheses", [])
-    config = state.get("config", {})
-
-    require_review = True
-    if isinstance(config, dict):
-        require_review = config.get("require_human_review", True)
-
-    # Novel/unusual hypotheses always need review
-    novel_found = any(
-        h.get("confidence", 0) > 0.5 and h.get("hypothesis_id") not in weakened
-        for h in hypotheses
-    )
-
-    return {
-        "review_required": require_review and novel_found,
-        "status": "awaiting_review" if (require_review and novel_found) else "completed",
     }

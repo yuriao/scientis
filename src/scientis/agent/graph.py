@@ -1,21 +1,20 @@
-"""LangGraph workflow definition.
+"""LangGraph workflow definition for scientific discovery.
 
 Workflow:
-  question → expand_query → retrieve_context → compile_evidence →
+  expand_query → retrieve_context → compile_evidence →
   induce_mechanism → check_contradictions → human_review → publish
 """
 
 import logging
-from typing import Literal
 
 from langgraph.graph import END, StateGraph
+from langgraph.types import interrupt
 
 from scientis.agent.state import AgentState
 from scientis.agent.tools import (
     check_contradictions,
     compile_evidence,
     expand_query,
-    human_review_gate,
     induce_mechanism,
     retrieve_context,
 )
@@ -23,36 +22,60 @@ from scientis.agent.tools import (
 logger = logging.getLogger(__name__)
 
 
-def should_review(state: AgentState) -> Literal["await_review", "publish"]:
-    """Route after human_review_gate."""
-    if state.get("review_required"):
-        return "await_review"
-    return "publish"
+async def human_review(state: AgentState) -> dict:
+    """Human-in-the-loop review gate.
+
+    When novel, high-confidence hypotheses are found, execution pauses here
+    and waits for the caller to provide decisions via Command(resume=...).
+    If review is not required, the node passes through immediately.
+    """
+    hypotheses = state.get("ranked_hypotheses", [])
+    weakened = state.get("weakened_hypotheses", [])
+    config = state.get("config", {})
+    require_review = (
+        config.get("require_human_review", True) if isinstance(config, dict) else True
+    )
+
+    novel_found = any(
+        h.get("confidence", 0) > 0.5 and h.get("hypothesis_id") not in weakened
+        for h in hypotheses
+    )
+
+    if require_review and novel_found:
+        # Pause execution. Caller resumes with:
+        #   Command(resume={"decisions": [...], "reviewer": "..."})
+        payload = interrupt({
+            "type": "review_required",
+            "hypotheses": hypotheses,
+            "message": "Review these hypotheses before publication.",
+        })
+        decisions = payload.get("decisions", []) if isinstance(payload, dict) else []
+        reviewer = payload.get("reviewer", "") if isinstance(payload, dict) else ""
+        return {
+            "review_decisions": decisions,
+            "reviewed_by": reviewer,
+            "review_required": True,
+            "status": "completed",
+        }
+
+    return {"review_required": False, "status": "completed"}
 
 
-def after_review(state: AgentState) -> Literal["publish", "revise"]:
-    """Route after human provides review decisions."""
-    decisions = state.get("review_decisions", [])
-    if any(d.get("action") == "revise" for d in decisions):
-        return "revise"
-    return "publish"
-
-
-async def publish(state: AgentState) -> AgentState:
-    """Compile final report and mark complete."""
+async def publish(state: AgentState) -> dict:
+    """Compile the final markdown report from hypotheses and counterevidence."""
     hypotheses = state.get("ranked_hypotheses", [])
     counterevidence = state.get("counterevidence_findings", [])
 
-    report_parts = [
-        f"# Scientific Discovery Report\n",
-        f"## Question\n{state['question']}\n",
+    parts = [
+        "# Scientific Discovery Report\n",
+        f"## Question\n{state.get('question', '')}\n",
         f"## Evidence Retrieved\n{state.get('evidence_count', 0)} chunks across papers\n",
     ]
 
     if hypotheses:
-        report_parts.append("## Mechanistic Hypotheses\n")
+        parts.append("## Mechanistic Hypotheses\n")
         for i, h in enumerate(hypotheses, 1):
-            report_parts.append(
+            parts.append(
                 f"### {i}. {h.get('mechanism', 'Unknown mechanism')}\n"
                 f"**Confidence:** {h.get('confidence', 0):.0%}\n\n"
                 f"{h.get('description', '')}\n\n"
@@ -62,72 +85,33 @@ async def publish(state: AgentState) -> AgentState:
             )
 
     if counterevidence:
-        report_parts.append("## Counterevidence\n")
+        parts.append("## Counterevidence\n")
         for ce in counterevidence:
-            for w in ce.get("weaknesses", []):
-                report_parts.append(f"- [{ce.get('severity', '?')}] {w}\n")
+            for weakness in ce.get("weaknesses", []):
+                parts.append(f"- [{ce.get('severity', '?')}] {weakness}\n")
 
-    report = "".join(report_parts)
-
-    return {
-        "final_report": report,
-        "status": "completed",
-    }
-
-
-async def handle_error(state: AgentState) -> AgentState:
-    """Error recovery node."""
-    logger.error("Workflow error: %s", state.get("error_message"))
-    return {"status": "error"}
+    return {"final_report": "".join(parts), "status": "completed"}
 
 
 def build_workflow() -> StateGraph:
-    """Build the scientific discovery LangGraph workflow."""
-
+    """Build and return the uncompiled scientific discovery workflow."""
     workflow = StateGraph(AgentState)
 
-    # Add nodes
     workflow.add_node("expand_query", expand_query)
     workflow.add_node("retrieve_context", retrieve_context)
     workflow.add_node("compile_evidence", compile_evidence)
     workflow.add_node("induce_mechanism", induce_mechanism)
     workflow.add_node("check_contradictions", check_contradictions)
-    workflow.add_node("human_review", human_review_gate)
+    workflow.add_node("human_review", human_review)
     workflow.add_node("publish", publish)
-    workflow.add_node("handle_error", handle_error)
 
-    # Set entry point
     workflow.set_entry_point("expand_query")
-
-    # Define edges
     workflow.add_edge("expand_query", "retrieve_context")
     workflow.add_edge("retrieve_context", "compile_evidence")
     workflow.add_edge("compile_evidence", "induce_mechanism")
     workflow.add_edge("induce_mechanism", "check_contradictions")
     workflow.add_edge("check_contradictions", "human_review")
-
-    # Conditional routing after review
-    workflow.add_conditional_edges(
-        "human_review",
-        should_review,
-        {
-            "await_review": END,  # Pauses — resume when human provides decisions
-            "publish": "publish",
-        },
-    )
-
+    workflow.add_edge("human_review", "publish")
     workflow.add_edge("publish", END)
-    workflow.add_edge("handle_error", END)
 
     return workflow
-
-
-# ── Compiled workflow ─────────────────────────────
-_discovery_workflow: StateGraph | None = None
-
-
-def get_workflow() -> StateGraph:
-    global _discovery_workflow
-    if _discovery_workflow is None:
-        _discovery_workflow = build_workflow().compile()
-    return _discovery_workflow
