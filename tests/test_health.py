@@ -1,16 +1,28 @@
 """Tests for the scientis API."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from scientis.api.deps import get_db as real_get_db
 from scientis.main import create_app
 
 
 @pytest.fixture
 def app():
-    return create_app()
+    app = create_app()
+
+    # Override DB dependency so tests don't hit real PostgreSQL
+    async def override_get_db():
+        mock_session = MagicMock(spec=AsyncSession)
+        mock_session.get = AsyncMock(return_value=None)
+        mock_session.execute = AsyncMock()
+        yield mock_session
+
+    app.dependency_overrides[real_get_db] = override_get_db
+    return app
 
 
 @pytest.fixture
@@ -47,8 +59,7 @@ async def test_health_when_neo4j_down(client):
 
 @pytest.mark.asyncio
 async def test_get_unknown_session_returns_404(client):
-    with patch("scientis.api.questions.get_db"):
-        response = await client.get("/v1/results/nonexistent-session")
+    response = await client.get("/v1/results/nonexistent-session")
     assert response.status_code == 404
 
 
