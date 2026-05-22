@@ -1,9 +1,9 @@
 """LLM client abstraction with tiered model selection.
 
 Tiers:
-  - cheap:   GPT-4o mini → figure interpretation, chart transcription, small extractions
-  - local:   vLLM (open-weight models) → bulk claim extraction, embeddings
-  - heavy:   Gemini 2.0 Flash / 2.5 Flash → long-context multimodal reasoning
+  - cheap:  GPT-4o mini  — query expansion, evidence compilation, small extractions
+  - local:  vLLM         — bulk claim extraction, embeddings (open-weight models)
+  - heavy:  Gemini Flash  — long-context multimodal reasoning
 """
 
 import logging
@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 class ModelTier(str, Enum):
-    cheap = "cheap"      # GPT-4o mini
-    local = "local"      # vLLM (open-weight)
-    heavy = "heavy"      # Gemini Flash
+    cheap = "cheap"   # GPT-4o mini
+    local = "local"   # vLLM (open-weight)
+    heavy = "heavy"   # Gemini Flash
 
 
 @dataclass
@@ -29,7 +29,7 @@ class LLMResponse:
 
 
 class LLMClient:
-    """Unified interface across OpenAI, vLLM, and Gemini providers."""
+    """Unified async interface across OpenAI, vLLM, and Gemini providers."""
 
     def __init__(
         self,
@@ -45,16 +45,14 @@ class LLMClient:
         self._openai_base = openai_base_url
         self._gemini_key = gemini_api_key
         self._vllm_base = vllm_base_url
-
         self._cheap_model = cheap_model
         self._local_model = local_model
         self._heavy_model = heavy_model
-
         self._openai_client = None
         self._vllm_client = None
         self._gemini_client = None
 
-    # ── Lazy init ──────────────────────────────────────
+    # ── Lazy-initialised provider clients ─────────────────────────────────
 
     @property
     def openai(self):
@@ -83,7 +81,7 @@ class LLMClient:
             self._gemini_client = genai.Client(api_key=self._gemini_key)
         return self._gemini_client
 
-    # ── Generation ─────────────────────────────────────
+    # ── Text generation ────────────────────────────────────────────────────
 
     async def generate(
         self,
@@ -93,23 +91,31 @@ class LLMClient:
         max_tokens: int = 2048,
         temperature: float = 0.1,
     ) -> LLMResponse:
-        """Generate a response from the appropriate tier."""
+        """Generate a response using the appropriate tier."""
         if tier == ModelTier.heavy and self._gemini_key:
             return await self._generate_gemini(messages, max_tokens, temperature)
-        elif tier == ModelTier.local:
+        if tier == ModelTier.local:
             return await self._generate_vllm(messages, response_format, max_tokens, temperature)
-        else:
-            return await self._generate_openai(
-                messages, self._cheap_model, response_format, max_tokens, temperature
-            )
+        return await self._generate_openai(
+            messages, self._cheap_model, response_format, max_tokens, temperature
+        )
 
     async def _generate_openai(
-        self, messages, model, response_format, max_tokens, temperature
+        self,
+        messages: list[dict],
+        model: str,
+        response_format: Optional[dict],
+        max_tokens: int,
+        temperature: float,
     ) -> LLMResponse:
-        kwargs = dict(model=model, messages=messages, max_tokens=max_tokens, temperature=temperature)
+        kwargs: dict = dict(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
         if response_format:
             kwargs["response_format"] = response_format
-
         resp = await self.openai.chat.completions.create(**kwargs)
         return LLMResponse(
             content=resp.choices[0].message.content or "",
@@ -119,12 +125,21 @@ class LLMClient:
         )
 
     async def _generate_vllm(
-        self, messages, response_format, max_tokens, temperature
+        self,
+        messages: list[dict],
+        response_format: Optional[dict],
+        max_tokens: int,
+        temperature: float,
     ) -> LLMResponse:
-        kwargs = dict(model=self._local_model, messages=messages, max_tokens=max_tokens, temperature=temperature)
+        kwargs: dict = dict(
+            model=self._local_model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
         if response_format:
+            # vLLM uses guided_json for structured output
             kwargs["extra_body"] = {"guided_json": response_format.get("json_schema", {})}
-
         resp = await self.vllm.chat.completions.create(**kwargs)
         return LLMResponse(
             content=resp.choices[0].message.content or "",
@@ -134,27 +149,32 @@ class LLMClient:
         )
 
     async def _generate_gemini(
-        self, messages, max_tokens, temperature
+        self,
+        messages: list[dict],
+        max_tokens: int,
+        temperature: float,
     ) -> LLMResponse:
-        # Convert OpenAI-format messages to Gemini format
+        from google.genai import types as genai_types
+
         system_prompt = ""
-        contents = []
+        user_parts: list[dict] = []
         for msg in messages:
             if msg["role"] == "system":
                 system_prompt = msg["content"]
             elif msg["role"] == "user":
-                contents.append({"role": "user", "parts": [{"text": msg["content"]}]})
+                user_parts.append({"text": msg["content"]})
             elif msg["role"] == "assistant":
-                contents.append({"role": "model", "parts": [{"text": msg["content"]}]})
+                user_parts.append({"text": msg["content"]})
 
-        resp = self.gemini.models.generate_content(
-            model=f"models/{self._heavy_model}",
-            contents=contents[-1]["parts"] if contents else [{"text": ""}],
-            config={
-                "system_instruction": system_prompt,
-                "max_output_tokens": max_tokens,
-                "temperature": temperature,
-            },
+        # Use the async client (aio) to avoid blocking the event loop
+        resp = await self.gemini.aio.models.generate_content(
+            model=self._heavy_model,
+            contents=user_parts or [{"text": ""}],
+            config=genai_types.GenerateContentConfig(
+                system_instruction=system_prompt or None,
+                max_output_tokens=max_tokens,
+                temperature=temperature,
+            ),
         )
         return LLMResponse(
             content=resp.text or "",
@@ -162,25 +182,25 @@ class LLMClient:
             tier=ModelTier.heavy,
         )
 
-    # ── Embeddings ─────────────────────────────────────
+    # ── Embeddings ─────────────────────────────────────────────────────────
 
     async def embed(self, texts: list[str], tier: ModelTier = ModelTier.local) -> list[list[float]]:
-        """Generate embeddings for a list of texts."""
-        if tier == ModelTier.local:
-            resp = await self.openai.embeddings.create(
-                model="text-embedding-3-small",
+        """Generate embeddings. Uses vLLM for local tier, OpenAI otherwise."""
+        if tier == ModelTier.local and self._vllm_base:
+            # Use the vLLM embeddings endpoint with the local model
+            resp = await self.vllm.embeddings.create(
+                model=self._local_model,
                 input=texts,
             )
-            return [d.embedding for d in resp.data]
         else:
             resp = await self.openai.embeddings.create(
                 model="text-embedding-3-small",
                 input=texts,
             )
-            return [d.embedding for d in resp.data]
+        return [d.embedding for d in resp.data]
 
 
-# ── Global pool ────────────────────────────────────
+# ── Module-level singleton ─────────────────────────────────────────────────
 
 _llm_pool: Optional[LLMClient] = None
 
