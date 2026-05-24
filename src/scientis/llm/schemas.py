@@ -193,7 +193,128 @@ MECHANISM_INDUCTION_SCHEMA = {
                     },
                 }
             },
-            "required": ["hypotheses"],
+        },
+    },
+}
+
+
+# ── VLM Figure Detection schema ─────────────────────────
+FIGURE_DETECTION_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "figure_detection",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "page_num": {"type": "integer"},
+                "figures": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "figure_label": {
+                                "type": "string",
+                                "description": "The figure number as written, e.g. 'Figure 1', 'Fig. 2', 'Fig. S1'",
+                            },
+                            "figure_number": {
+                                "type": "integer",
+                                "description": "Parsed integer from the label, e.g. 1 from 'Figure 1'",
+                            },
+                            "x1": {
+                                "type": "number",
+                                "description": "Left edge of figure bounding box (0-1 fraction of page width)",
+                            },
+                            "y1": {
+                                "type": "number",
+                                "description": "Top edge of figure bounding box (0-1 fraction of page height)",
+                            },
+                            "x2": {
+                                "type": "number",
+                                "description": "Right edge of figure bounding box (0-1 fraction of page width)",
+                            },
+                            "y2": {
+                                "type": "number",
+                                "description": "Bottom edge of figure bounding box (0-1 fraction of page height)",
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1,
+                                "description": "Detection confidence. < 0.6 will be logged and flagged.",
+                            },
+                        },
+                        "required": ["figure_label", "figure_number", "x1", "y1", "x2", "y2", "confidence"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["page_num", "figures"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+# ── VLM Panel Description schema ────────────────────────
+PANEL_DESCRIPTION_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "panel_description",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "figure_label": {
+                    "type": "string",
+                    "description": "The figure number as written, e.g. 'Figure 1'",
+                },
+                "panels": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "panel_label": {
+                                "type": "string",
+                                "description": "Panel letter (e.g. 'A', 'B', 'C') or empty for single-panel figures",
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "2-4 sentence visual description of what this panel shows",
+                            },
+                            "chart_type": {
+                                "type": "string",
+                                "enum": [
+                                    "bar_chart",
+                                    "line_plot",
+                                    "scatter_plot",
+                                    "heatmap",
+                                    "microscopy",
+                                    "western_blot",
+                                    "diagram",
+                                    "table",
+                                    "photograph",
+                                    "unknown",
+                                ],
+                                "description": "Type of visual in this panel",
+                            },
+                            "key_observations": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "2-5 bullet-point observations from this panel",
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1,
+                                "description": "Description confidence. < 0.6 flagged for review.",
+                            },
+                        },
+                        "required": ["panel_label", "description", "chart_type", "key_observations", "confidence"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["figure_label", "panels"],
             "additionalProperties": False,
         },
     },

@@ -2,6 +2,10 @@
 
 Extracts structured claims, entities, and relations from parsed papers.
 Uses tiered LLM: cheap for figure captions, local/heavy for claim extraction.
+
+When figure panel descriptions are available (from figure_understanding.py),
+they are injected into the LLM prompt to produce richer claim extraction
+with visual evidence references.
 """
 
 import json
@@ -35,6 +39,27 @@ async def extract_claims(
     text_data = json.loads(store.get(text_key))
     pages = text_data.get("pages", [])
 
+    # Load figure panel descriptions if available
+    panels_key = f"papers/{paper_id}/artifacts/figure_panels.json"
+    panel_context = ""
+    try:
+        panels_data = json.loads(store.get(panels_key))
+        panel_descriptions = panels_data.get("panels", [])
+        if panel_descriptions:
+            panel_context = "\n\nFigure Panel Descriptions (from visual analysis):\n"
+            for p in panel_descriptions:
+                panel_context += (
+                    f"  - {p.get('figure_label', '')} panel {p.get('panel_label', '')}: "
+                    f"{p.get('description', '')} "
+                    f"[{p.get('chart_type', '')}]\n"
+                )
+            logger.debug(
+                "Loaded %d panel descriptions for %s",
+                len(panel_descriptions), paper_id,
+            )
+    except Exception:
+        logger.debug("No panel descriptions found for %s", paper_id)
+
     # Build full text by section
     full_text = "\n\n".join(p["text"] for p in pages)
 
@@ -55,9 +80,20 @@ async def extract_claims(
                             "For each claim, provide evidence spans (verbatim quotes), "
                             "entities mentioned, and confidence based on evidence quality. "
                             "Include contradictory text if the paper itself notes limitations."
+                            + (
+                                "\n\nWhen figure panel descriptions are provided, use them "
+                                "to enrich evidence spans with figure_id and panel references."
+                                if panel_context else ""
+                            )
                         ),
                     },
-                    {"role": "user", "content": f"Paper text section:\n\n{chunk}"},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Paper text section:\n\n{chunk}"
+                            + (panel_context if panel_context else "")
+                        ),
+                    },
                 ],
                 tier=ModelTier.cheap,
                 response_format=CLAIM_EXTRACTION_SCHEMA,

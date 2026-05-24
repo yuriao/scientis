@@ -1,9 +1,13 @@
 """LLM client abstraction with tiered model selection.
 
-Tiers:
+Text tiers:
   - cheap:  GPT-4o mini  — query expansion, evidence compilation, small extractions
   - local:  vLLM         — bulk claim extraction, embeddings (open-weight models)
   - heavy:  Gemini Flash  — long-context multimodal reasoning
+
+Vision tiers (for figure/panel understanding):
+  - vision_cheap:   qwen3-vl-8b  — figure detection, panel description (~$0.0004/paper)
+  - vision_default: qwen3-vl-32b — fallback for complex figures (~$0.0002/paper)
 """
 
 import logging
@@ -17,6 +21,8 @@ class ModelTier(str, Enum):  # noqa: UP042
     cheap = "cheap"  # GPT-4o mini
     local = "local"  # vLLM (open-weight)
     heavy = "heavy"  # Gemini Flash
+    vision_cheap = "vision_cheap"  # qwen3-vl-8b  (figure detection, panel description)
+    vision_default = "vision_default"  # qwen3-vl-32b (fallback)
 
 
 @dataclass
@@ -28,7 +34,7 @@ class LLMResponse:
 
 
 class LLMClient:
-    """Unified async interface across OpenAI, vLLM, and Gemini providers."""
+    """Unified async interface across OpenAI, vLLM, Gemini, and OpenRouter providers."""
 
     def __init__(
         self,
@@ -39,6 +45,10 @@ class LLMClient:
         cheap_model: str = "gpt-4o-mini",
         local_model: str = "meta-llama/Llama-3.1-8B-Instruct",
         heavy_model: str = "gemini-2.0-flash",
+        vision_cheap_model: str = "qwen/qwen3-vl-8b-instruct",
+        vision_default_model: str = "qwen/qwen3-vl-32b-instruct",
+        openrouter_api_key: str = "",
+        openrouter_base_url: str = "https://openrouter.ai/api/v1",
     ):
         self._openai_key = openai_api_key
         self._openai_base = openai_base_url
@@ -47,9 +57,14 @@ class LLMClient:
         self._cheap_model = cheap_model
         self._local_model = local_model
         self._heavy_model = heavy_model
+        self._vision_cheap_model = vision_cheap_model
+        self._vision_default_model = vision_default_model
+        self._openrouter_key = openrouter_api_key
+        self._openrouter_base = openrouter_base_url
         self._openai_client = None
         self._vllm_client = None
         self._gemini_client = None
+        self._openrouter_client = None
 
     # ── Lazy-initialised provider clients ─────────────────────────────────
 
@@ -82,6 +97,17 @@ class LLMClient:
 
             self._gemini_client = genai.Client(api_key=self._gemini_key)
         return self._gemini_client
+
+    @property
+    def openrouter(self):
+        if self._openrouter_client is None:
+            from openai import AsyncOpenAI
+
+            self._openrouter_client = AsyncOpenAI(
+                api_key=self._openrouter_key,
+                base_url=self._openrouter_base,
+            )
+        return self._openrouter_client
 
     # ── Text generation ────────────────────────────────────────────────────
 
@@ -184,6 +210,60 @@ class LLMClient:
             tier=ModelTier.heavy,
         )
 
+    # ── Vision generation ──────────────────────────────────────────────────
+
+    async def generate_vision(
+        self,
+        messages: list[dict],
+        tier: ModelTier = ModelTier.vision_cheap,
+        max_tokens: int = 2048,
+        temperature: float = 0.1,
+    ) -> LLMResponse:
+        """Generate a response from a vision-language model via OpenRouter.
+
+        Tiered fallback:
+          - vision_cheap:   qwen3-vl-8b (primary, fast)
+          - vision_default: qwen3-vl-32b (fallback, more capable)
+
+        Content in messages should be structured for multimodal:
+          - {"role": "user", "content": [{"type": "text", "text": "..."},
+                                         {"type": "image_url", "image_url": {"url": "data:..."}}]}
+        """
+        model = (
+            self._vision_default_model
+            if tier == ModelTier.vision_default
+            else self._vision_cheap_model
+        )
+        try:
+            resp = await self.openrouter.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                extra_headers={
+                    "HTTP-Referer": "https://github.com/yuriao/scientis",
+                    "X-Title": "Scientis",
+                },
+            )
+            return LLMResponse(
+                content=resp.choices[0].message.content or "",
+                model=resp.model or model,
+                tier=tier,
+                usage=resp.usage.model_dump() if resp.usage else {},
+            )
+        except Exception:
+            logger.exception("Vision generation failed with tier %s on %s", tier, model)
+            # Fallback: try vision_default if we were on vision_cheap
+            if tier == ModelTier.vision_cheap:
+                logger.info("Retrying vision generation with vision_default tier")
+                return await self.generate_vision(
+                    messages=messages,
+                    tier=ModelTier.vision_default,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            raise
+
     # ── Embeddings ─────────────────────────────────────────────────────────
 
     async def embed(self, texts: list[str], tier: ModelTier = ModelTier.local) -> list[list[float]]:
@@ -217,5 +297,6 @@ def get_llm() -> LLMClient:
             openai_api_key=s.openai_api_key,
             gemini_api_key=s.gemini_api_key,
             vllm_base_url=s.vllm_base_url,
+            openrouter_api_key=s.openrouter_api_key,
         )
     return _llm_pool

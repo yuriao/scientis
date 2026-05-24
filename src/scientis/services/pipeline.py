@@ -1,12 +1,13 @@
 """Full paper processing pipeline.
 
-Chains together the four processing stages that transform a raw PDF
+Chains together the processing stages that transform a raw PDF
 into indexed, queryable knowledge:
 
-  1. Parse        — extract text and figures from the PDF
-  2. Understand   — extract structured claims via LLM
-  3. Graph ingest — store claims and entity links in Neo4j
-  4. Index        — add text chunks to the hybrid retrieval index
+  1. Parse                — extract text and figures from the PDF
+  2. Figure Understanding — VLM-based visual analysis of figures and panels
+  3. Understand           — extract structured claims via LLM
+  4. Graph ingest         — store claims and entity links in Neo4j
+  5. Index                — add text chunks to the hybrid retrieval index
 """
 
 import json
@@ -15,6 +16,7 @@ from collections.abc import Callable, Coroutine
 from typing import Optional
 
 from scientis.config import Settings
+from scientis.services.figure_understanding import process_figure_understanding
 from scientis.services.graph_service import get_graph_service
 from scientis.services.parsing import parse_paper
 from scientis.services.retrieval import get_retriever
@@ -57,6 +59,17 @@ async def run_pipeline(
             paper_id,
             parse_result["pages"],
             parse_result["figures"],
+        )
+
+        # 1.5 Figure Understanding (VLM-based visual analysis)
+        await _update("figure_understanding")
+        fig_result = await process_figure_understanding(paper_id, store)
+        logger.info(
+            "Figure understanding for %s: %d figures, %d panels, %d unprocessed",
+            paper_id,
+            sum(len(d.figures) for d in fig_result.figures),
+            len(fig_result.panels),
+            len(fig_result.unprocessed_figures),
         )
 
         # 2. Extract structured claims via LLM
