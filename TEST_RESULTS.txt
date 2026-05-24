@@ -1,0 +1,17 @@
+Scientis Test Results — 2026-05-24
+===================================
+
+Commit: 0034387 - feat: figure panel understanding system
+Python: 3.13.12 on macOS 26.2 (darwin)
+
+PASSED: 33/33 (100%) in 0.32s
+
+Suites:
+  test_figure_understanding.py .... 22/22
+  test_health.py ..................  4/4
+  test_pipeline.py ................  3/3
+  test_retrieval.py ...............  4/4
+
+Details: /Users/yuriao/scientis/test_results.json
+Repo:     /Users/yuriao/scientis
+GitHub:   https://github.com/yuriao/scientis

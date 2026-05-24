@@ -3,6 +3,10 @@
 A stateful, multimodal, retrieval-grounded agent platform for cross-paper
 evidence synthesis, mechanism induction, and hypothesis generation.
 
+![Tests](https://img.shields.io/badge/tests-33%2F33%20passed-brightgreen)
+![Python](https://img.shields.io/badge/python-3.13-blue)
+![Phase](https://img.shields.io/badge/phase-2%20(understanding)-blue)
+
 ## Architecture
 
 ```
@@ -47,6 +51,7 @@ induce_mechanism → check_contradictions → human_review → publish
 | Object Store | S3-compatible (MinIO for local) |
 | Queue | Redis |
 | Model Serving | vLLM (local) + GPT-4o mini + Gemini Flash |
+| Vision | Qwen3-VL (8B/32B) via OpenRouter for figure/panel understanding |
 
 ## API
 
@@ -95,11 +100,13 @@ curl -X POST http://localhost:8080/v1/questions \
 ## How it works
 
 1. **Ingestion**: PDF uploaded → stored in S3, metadata in Postgres
-2. **Understanding**: pymupdf extracts text/figures → LLM extracts claims with evidence spans
-3. **Evidence**: Claims and entities stored in Neo4j graph with support/contradiction edges
-4. **Reasoning**: LangGraph agent retrieves, compares, induces mechanisms, checks contradictions
-5. **Review**: Human-in-the-loop gate for novel/high-impact hypotheses
-6. **Export**: Reports and slide decks generated from evidence graph
+2. **Parsing**: pymupdf renders pages at 300 DPI, extracts text with layout positions
+3. **Figure Understanding**: VLM (Qwen3-VL) detects figures on rendered pages → deterministic caption matching → panel-level visual descriptions stored in S3
+4. **Claim Extraction**: LLM extracts claims with evidence spans, enriched with panel descriptions
+5. **Evidence**: Claims and entities stored in Neo4j graph with support/contradiction edges
+6. **Reasoning**: LangGraph agent retrieves, compares, induces mechanisms, checks contradictions
+7. **Review**: Human-in-the-loop gate for novel/high-impact hypotheses
+8. **Export**: Reports and slide decks generated from evidence graph
 
 ## Project Structure
 
@@ -112,11 +119,18 @@ src/scientis/
 │   ├── questions.py      Discovery questions + review
 │   └── exports.py        Report/slide generation
 ├── models/               Pydantic domain models
+│   ├── claim.py          Claim + EvidenceSpan
+│   ├── figure.py         FigureBBox, PanelDescription (VLM output)
+│   ├── paper.py          PaperMetadata
+│   ├── hypothesis.py     Hypothesis generation
+│   └── events.py         Event bus models
 ├── llm/                  LLM client abstraction + structured output schemas
 ├── services/
 │   ├── ingestion.py      PDF → object store
-│   ├── parsing.py        pymupdf text/figure extraction
-│   ├── understanding.py  LLM claim extraction
+│   ├── parsing.py        pymupdf text/figure extraction + page rendering
+│   ├── figure_understanding.py  VLM-based figure detection + panel description
+│   ├── understanding.py  LLM claim extraction (enriched with panel data)
+│   ├── pipeline.py       Full paper processing pipeline (parse → figures → claims → graph → index)
 │   ├── graph_service.py  Neo4j CRUD + subgraph queries
 │   ├── retrieval.py      BM25 + vector + graph hybrid retrieval
 │   └── events.py         Internal event bus
